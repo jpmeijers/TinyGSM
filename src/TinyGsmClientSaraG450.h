@@ -722,9 +722,18 @@ public:
     if (res == 1) {
       return true;  // It's now active
     } else if (res == 2) {  // If it's not active yet, wait for the +UUPSDA URC
-      if (waitResponse(180000L, GF("+UUPSDA: 0")) != 1) {  // 0=successful
-        // TODO: Sometimes we get +UUPSDA: 36 which will take 3 minutes to timeout
+      if (waitResponse(180000L, GF("+UUPSDA: ")) != 1) {  // 0=successful
         return false;
+      } else {
+        // We got +UUPSDA: 
+        // Check if not 0
+        // If not 0 it's a failure
+        // +UUPSDA: 36
+        // +UUPSDA: 33
+        int result = stream.readStringUntil('\n').toInt();
+        if(result != 0) {
+          return false;
+        }
       }
       streamSkipUntil('\n');  // Ignore the IP address, if returned
     } else {
