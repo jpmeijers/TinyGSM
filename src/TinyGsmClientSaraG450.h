@@ -956,7 +956,7 @@ protected:
 
   size_t modemRead(size_t size, uint8_t mux) {
     uint32_t startMillis = millis();
-
+    delay(20);
     sendAT(GF("+USORD="), mux, ',', size);
     if (waitResponse(GF(GSM_NL "+USORD:")) != 1) {
       // Might end in an error because the socket is closed
@@ -982,6 +982,8 @@ protected:
   }
 
   size_t modemGetAvailable(uint8_t mux) {
+    // Delay 20ms before sending command, but check for URC's
+    waitResponse(20);
     // NOTE:  Querying a closed socket gives an error "operation not allowed"
     sendAT(GF("+USORD="), mux, ",0");
     size_t result = 0;
@@ -1145,6 +1147,8 @@ finish:
       data.trim();
       if (data.length()) {
         DBG("### Unhandled:", data);
+      } else {
+        DBG("### waitResponse timeout");
       }
       data = "";
     }
