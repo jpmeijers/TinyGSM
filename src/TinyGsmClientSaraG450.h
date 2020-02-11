@@ -40,6 +40,7 @@ enum RegStatus {
   REG_UNKNOWN      = 4,
 };
 
+enum SocketProtocol {TCP = 6, UDP = 17};
 
 class TinyGsmSaraG450
 {
@@ -54,13 +55,14 @@ class GsmClient : public Client
 public:
   GsmClient() {}
 
-  GsmClient(TinyGsmSaraG450& modem, uint8_t mux = 0) {
-    init(&modem, mux);
+  GsmClient(TinyGsmSaraG450& modem, uint8_t mux = 0, SocketProtocol protocol = TCP) {
+    init(&modem, mux, protocol);
   }
 
-  bool init(TinyGsmSaraG450* modem, uint8_t mux = 0) {
+  bool init(TinyGsmSaraG450* modem, uint8_t mux = 0, SocketProtocol protocol = TCP) {
     this->at = modem;
     this->mux = mux;
+    this->protocol = protocol;
     sock_available = 0;
     prev_check = 0;
     sock_connected = false;
@@ -78,7 +80,7 @@ public:
     rx.clear();
 
     uint8_t oldMux = mux;
-    sock_connected = at->modemConnect(host, port, &mux, false, timeout_s);
+    sock_connected = at->modemConnect(host, port, &mux, false, timeout_s, protocol);
     if (mux != oldMux) {
         DBG("WARNING:  Mux number changed from", oldMux, "to", mux);
         at->sockets[oldMux] = NULL;
@@ -214,6 +216,7 @@ public:
 private:
   TinyGsmSaraG450*   at;
   uint8_t         mux;
+  SocketProtocol  protocol;
   uint16_t        sock_available;
   uint32_t        prev_check;
   bool            sock_connected;
@@ -227,8 +230,8 @@ class GsmClientSecure : public GsmClient
 public:
   GsmClientSecure() {}
 
-  GsmClientSecure(TinyGsmSaraG450& modem, uint8_t mux = 1)
-    : GsmClient(modem, mux)
+  GsmClientSecure(TinyGsmSaraG450& modem, uint8_t mux = 1, SocketProtocol protocol = TCP)
+    : GsmClient(modem, mux, protocol)
   {}
 
 public:
@@ -237,7 +240,7 @@ public:
     TINY_GSM_YIELD();
     rx.clear();
     uint8_t oldMux = mux;
-    sock_connected = at->modemConnect(host, port, &mux, true, timeout_s);
+    sock_connected = at->modemConnect(host, port, &mux, true, timeout_s, protocol);
     if (mux != oldMux) {
         DBG("WARNING:  Mux number changed from", oldMux, "to", mux);
         at->sockets[oldMux] = NULL;
@@ -884,10 +887,10 @@ public:
 protected:
 
   bool modemConnect(const char* host, uint16_t port, uint8_t* mux,
-                    bool ssl = false, int timeout_s = 120)
+                    bool ssl = false, int timeout_s = 120, SocketProtocol protocol = TCP)
   {
     uint32_t timeout_ms = ((uint32_t)timeout_s)*1000;
-    sendAT(GF("+USOCR=6"));  // create a socket
+    sendAT(GF("+USOCR="), protocol);  // create a socket
     if (waitResponse(GF(GSM_NL "+USOCR:")) != 1) {  // reply is +USOCR: ## of socket created
       return false;
     }
@@ -923,9 +926,12 @@ protected:
 
   bool modemDisconnect(uint8_t mux) {
     TINY_GSM_YIELD();
-    if (!modemGetConnected(mux)) {
-      sockets[mux]->sock_connected = false;
-      return true;
+    if(sockets[mux]->protocol == TCP) {
+      // AT+USOCTL=x,10 only works for TCP sockets
+      if (!modemGetConnected(mux)) {
+        sockets[mux]->sock_connected = false;
+        return true;
+      }
     }
     bool success;
     sendAT(GF("+USOCL="), mux);
