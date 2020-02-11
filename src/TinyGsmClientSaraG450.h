@@ -14,7 +14,15 @@
 
 #define TINY_GSM_MUX_COUNT 7
 
-#include "TinyGsmCommon.h"
+#include "TinyGsmBattery.tpp"
+#include "TinyGsmCalling.tpp"
+#include "TinyGsmGPRS.tpp"
+#include "TinyGsmGSMLocation.tpp"
+#include "TinyGsmModem.tpp"
+#include "TinyGsmSMS.tpp"
+#include "TinyGsmSSL.tpp"
+#include "TinyGsmTCP.tpp"
+#include "TinyGsmTime.tpp"
 
 #define GSM_NL "\r\n"
 static const char GSM_OK[] TINY_GSM_PROGMEM        = "OK" GSM_NL;
@@ -31,12 +39,26 @@ enum RegStatus {
   REG_UNKNOWN      = 4,
 };
 
-class TinyGsmSaraG450
-    : public TinyGsmModem<TinyGsmSaraG450, READ_AND_CHECK_SIZE,
-                          TINY_GSM_MUX_COUNT> {
-  friend class TinyGsmModem<TinyGsmSaraG450, READ_AND_CHECK_SIZE,
-                            TINY_GSM_MUX_COUNT>;
-
+class TinyGsmSaraG450 : public TinyGsmModem<TinyGsmSaraG450>,
+                        public TinyGsmGPRS<TinyGsmSaraG450>,
+                        public TinyGsmTCP<TinyGsmSaraG450, READ_AND_CHECK_SIZE,
+                                          TINY_GSM_MUX_COUNT>,
+                        public TinyGsmSSL<TinyGsmSaraG450>,
+                        public TinyGsmCalling<TinyGsmSaraG450>,
+                        public TinyGsmSMS<TinyGsmSaraG450>,
+                        public TinyGsmGSMLocation<TinyGsmSaraG450>,
+                        public TinyGsmTime<TinyGsmSaraG450>,
+                        public TinyGsmBattery<TinyGsmSaraG450> {
+  friend class TinyGsmModem<TinyGsmSaraG450>;
+  friend class TinyGsmGPRS<TinyGsmSaraG450>;
+  friend class TinyGsmTCP<TinyGsmSaraG450, READ_AND_CHECK_SIZE,
+                          TINY_GSM_MUX_COUNT>;
+  friend class TinyGsmSSL<TinyGsmSaraG450>;
+  friend class TinyGsmCalling<TinyGsmSaraG450>;
+  friend class TinyGsmSMS<TinyGsmSaraG450>;
+  friend class TinyGsmGSMLocation<TinyGsmSaraG450>;
+  friend class TinyGsmTime<TinyGsmSaraG450>;
+  friend class TinyGsmBattery<TinyGsmSaraG450>;
 
   /*
    * Inner Client
@@ -66,7 +88,7 @@ class TinyGsmSaraG450
     }
 
    public:
-    int connect(const char* host, uint16_t port, int timeout_s) {
+    virtual int connect(const char* host, uint16_t port, int timeout_s) {
       stop();
       TINY_GSM_YIELD();
       rx.clear();
@@ -82,17 +104,9 @@ class TinyGsmSaraG450
 
       return sock_connected;
     }
-    int connect(IPAddress ip, uint16_t port, int timeout_s) {
-      return connect(TinyGsmStringFromIp(ip).c_str(), port, timeout_s);
-    }
-    int connect(const char* host, uint16_t port) override {
-      return connect(host, port, 75);
-    }
-    int connect(IPAddress ip, uint16_t port) override {
-      return connect(ip, port, 75);
-    }
+    TINY_GSM_CLIENT_CONNECT_OVERRIDES
 
-    void stop(uint32_t maxWaitMs) {
+    virtual void stop(uint32_t maxWaitMs) {
       dumpModemBuffer(maxWaitMs);
       at->modemDisconnect(mux);
     }
@@ -119,7 +133,7 @@ class TinyGsmSaraG450
         : GsmClientSaraG450(modem, mux) {}
 
    public:
-    int connect(const char* host, uint16_t port, int timeout_s) {
+    int connect(const char* host, uint16_t port, int timeout_s) override {
       stop();
       TINY_GSM_YIELD();
       rx.clear();
@@ -133,6 +147,7 @@ class TinyGsmSaraG450
       at->maintain();
       return sock_connected;
     }
+    TINY_GSM_CLIENT_CONNECT_OVERRIDES
   };
 
   /*
@@ -231,18 +246,6 @@ class TinyGsmSaraG450
     return false;
   }
 
-  bool thisHasSSL() {
-    return true;
-  }
-
-  bool thisHasWifi() {
-    return false;
-  }
-
-  bool thisHasGPRS() {
-    return true;
-  }
-
   /*
    * Power functions
    */
@@ -267,25 +270,6 @@ class TinyGsmSaraG450
   }
 
   bool sleepEnableImpl(bool enable = true) TINY_GSM_ATTR_NOT_IMPLEMENTED;
-
-  /*
-   * SIM card functions
-   */
- protected:
-  String getIMEIImpl() {
-    sendAT(GF("+CGSN"));
-    // if (waitResponse(GF(GSM_NL)) != 1) {
-    //   return "";
-    // }
-    String res = "";
-    for (int i = 0; res == "" && i < 3; i++) {
-      res = stream.readStringUntil('\n');
-      res.trim();
-    }
-    waitResponse();
-    // res.trim();
-    return res;
-  }
 
   /*
    * Generic network functions
@@ -338,6 +322,16 @@ class TinyGsmSaraG450
  protected:
   bool isNetworkConnectedImpl() {
     return isNetworkGprsConnected();
+  }
+
+  String getLocalIPImpl() {
+    sendAT(GF("+UPSND=0,0"));
+    if (waitResponse(GF(GSM_NL "+UPSND:")) != 1) { return ""; }
+    streamSkipUntil(',');   // Skip PSD profile
+    streamSkipUntil('\"');  // Skip request type
+    String res = stream.readStringUntil('\"');
+    if (waitResponse() != 1) { return ""; }
+    return res;
   }
 
   /*
@@ -489,16 +483,21 @@ class TinyGsmSaraG450
   }
 
   /*
-   * IP Address functions
+   * SIM card functions
    */
  protected:
-  String getLocalIPImpl() {
-    sendAT(GF("+UPSND=0,0"));
-    if (waitResponse(GF(GSM_NL "+UPSND:")) != 1) { return ""; }
-    streamSkipUntil(',');   // Skip PSD profile
-    streamSkipUntil('\"');  // Skip request type
-    String res = stream.readStringUntil('\"');
-    if (waitResponse() != 1) { return ""; }
+  String getIMEIImpl() {
+    sendAT(GF("+CGSN"));
+    // if (waitResponse(GF(GSM_NL)) != 1) {
+    //   return "";
+    // }
+    String res = "";
+    for (int i = 0; res == "" && i < 3; i++) {
+      res = stream.readStringUntil('\n');
+      res.trim();
+    }
+    waitResponse();
+    // res.trim();
     return res;
   }
 
@@ -528,19 +527,13 @@ class TinyGsmSaraG450
   }
 
   /*
-   * GPS location functions
-   */
- public:
-  // No functions of this type supported
-
-  /*
    * Time functions
    */
  protected:
   // Can follow the standard CCLK function in the template
 
   /*
-   * Battery & temperature functions
+   * Battery functions
    */
  protected:
   uint16_t getBattVoltageImpl() TINY_GSM_ATTR_NOT_AVAILABLE;
@@ -565,10 +558,6 @@ class TinyGsmSaraG450
     milliVolts  = 0;
     return true;
   }
-
-  // This would only available for a small number of modules in this group
-  // (TOBY-L)
-  float getTemperatureImpl() TINY_GSM_ATTR_NOT_IMPLEMENTED;
 
   /*
    * Client related functions
