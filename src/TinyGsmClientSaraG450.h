@@ -313,6 +313,7 @@ public:
     }
     // if the sim is ready, or it's locked but no pin has been provided, return true
     else {
+      clearRxStreamBuffer();
       return (ret == SIM_READY || ret == SIM_LOCKED);
     }
   }
@@ -411,6 +412,7 @@ public:
   }
 
   String getModemInfo() {
+    delay(100);
     clearRxStreamBuffer();
     sendAT(GF("I"));
     String res;
@@ -478,11 +480,13 @@ public:
    */
 
   bool simUnlock(const char *pin) {
+    clearRxStreamBuffer();
     sendAT(GF("+CPIN=\""), pin, GF("\""));
     return waitResponse() == 1;
   }
 
   String getSimCCID() {
+    clearRxStreamBuffer();
     sendAT(GF("+CCID"));
     if (waitResponse(GF(GSM_NL "+CCID:")) != 1) {
       return "";
@@ -494,6 +498,7 @@ public:
   }
 
   String getIMEI() {
+    clearRxStreamBuffer();
     sendAT(GF("+CGSN"));
     // if (waitResponse(GF(GSM_NL)) != 1) {
     //   return "";
@@ -511,7 +516,8 @@ public:
   SimStatus getSimStatus(unsigned long timeout_ms = 10000L) {
     for (unsigned long start = millis(); millis() - start < timeout_ms; ) {
       sendAT(GF("+CPIN?"));
-      if (waitResponse(GF(GSM_NL "+CPIN:")) != 1) {
+      // Waiting for sim to unlock response can be slow
+      if (waitResponse(4000, GF(GSM_NL "+CPIN:")) != 1) {
         delay(1000);
         continue;
       }
