@@ -15,6 +15,8 @@
 // #define TINY_GSM_MODEM_SIM868
 // #define TINY_GSM_MODEM_SIM900
 // #define TINY_GSM_MODEM_SIM7000
+// #define TINY_GSM_MODEM_SIM5360
+// #define TINY_GSM_MODEM_SIM7600
 // #define TINY_GSM_MODEM_UBLOX
 // #define TINY_GSM_MODEM_SARAR4
 // #define TINY_GSM_MODEM_M95
@@ -40,7 +42,7 @@
 //SoftwareSerial SerialAT(2, 3); // RX, TX
 
 // See all AT commands, if wanted
-//#define DUMP_AT_COMMANDS
+// #define DUMP_AT_COMMANDS
 
 // Define the serial console for debug prints, if needed
 #define TINY_GSM_DEBUG SerialMon
@@ -58,6 +60,7 @@
 #define TINY_GSM_TEST_SMS true
 #define TINY_GSM_TEST_USSD true
 #define TINY_GSM_TEST_BATTERY true
+#define TINY_GSM_TEST_GPS false
 // powerdown modem after tests
 #define TINY_GSM_POWERDOWN false
 
@@ -65,18 +68,42 @@
 #define GSM_PIN ""
 
 // Set phone numbers, if you want to test SMS and Calls
-//#define SMS_TARGET  "+380xxxxxxxxx"
-//#define CALL_TARGET "+380xxxxxxxxx"
+// #define SMS_TARGET  "+380xxxxxxxxx"
+// #define CALL_TARGET "+380xxxxxxxxx"
 
-// Your GPRS credentials
-// Leave empty, if missing user or pass
+// Your GPRS credentials, if any
 const char apn[]  = "YourAPN";
 const char gprsUser[] = "";
 const char gprsPass[] = "";
+
+// Your WiFi connection credentials, if applicable
 const char wifiSSID[]  = "YourSSID";
 const char wifiPass[] = "YourWiFiPass";
 
 #include <TinyGsmClient.h>
+
+#if TINY_GSM_TEST_GPRS && not defined TINY_GSM_MODEM_HAS_GPRS
+#undef TINY_GSM_TEST_GPRS
+#undef TINY_GSM_TEST_CALL
+#undef TINY_GSM_TEST_SMS
+#undef TINY_GSM_TEST_USSD
+#undef TINY_GSM_TEST_WIFI
+#define TINY_GSM_TEST_GPRS false
+#define TINY_GSM_TEST_CALL false
+#define TINY_GSM_TEST_SMS false
+#define TINY_GSM_TEST_USSD false
+#define TINY_GSM_TEST_WIFI true
+#endif
+#if TINY_GSM_TEST_WIFI && not defined TINY_GSM_MODEM_HAS_WIFI
+#undef TINY_GSM_USE_GPRS
+#undef TINY_GSM_USE_WIFI
+#define TINY_GSM_USE_GPRS true
+#define TINY_GSM_USE_WIFI false
+#endif
+#if TINY_GSM_TEST_GPS && not defined TINY_GSM_MODEM_HAS_GPS
+#undef TINY_GSM_TEST_GPS
+#define TINY_GSM_TEST_GPS false
+#endif
 
 #ifdef DUMP_AT_COMMANDS
   #include <StreamDebugger.h>
@@ -91,18 +118,15 @@ void setup() {
   SerialMon.begin(115200);
   delay(10);
 
+  // !!!!!!!!!!!
   // Set your reset, enable, power pins here
-  pinMode(20, OUTPUT);
-  digitalWrite(20, HIGH);
-
-  pinMode(23, OUTPUT);
-  digitalWrite(23, HIGH);
+  // !!!!!!!!!!!
 
   DBG("Wait...");
 
   // Set GSM module baud rate
   TinyGsmAutoBaud(SerialAT,GSM_AUTOBAUD_MIN,GSM_AUTOBAUD_MAX);
-  //SerialAT.begin(9600);
+  //SerialAT.begin(115200);
   delay(3000);
 }
 
@@ -150,7 +174,7 @@ void loop() {
 #endif
 
   DBG("Waiting for network...");
-  if (!modem.waitForNetwork()) {
+  if (!modem.waitForNetwork(600000L)) {
     delay(10000);
     return;
   }
@@ -193,7 +217,9 @@ void loop() {
   // DBG("GSM Time:", gsmTime);
   // String gsmDate = modem.getGSMDateTime(DATE_DATE);
   // DBG("GSM Date:", gsmDate);
+#endif
 
+#if TINY_GSM_TEST_USSD
   String ussd_balance = modem.sendUSSD("*111#");
   DBG("Balance (USSD):", ussd_balance);
 
@@ -201,7 +227,7 @@ void loop() {
   DBG("Phone number (USSD):", ussd_phone_num);
 #endif
 
-#if defined(TINY_GSM_MODEM_HAS_GPS)
+#if TINY_GSM_TEST_GPS
   modem.enableGPS();
   String gps_raw = modem.getGPSraw();
   modem.disableGPS();
@@ -213,8 +239,15 @@ void loop() {
   DBG("SMS:", res ? "OK" : "fail");
 
   // This is only supported on SIMxxx series
-  res = modem.sendSMS_UTF16(SMS_TARGET, u"Привіііт!", 9);
-  DBG("UTF16 SMS:", res ? "OK" : "fail");
+  res = modem.sendSMS_UTF8_begin(SMS_TARGET);
+  if(res) {
+    auto stream = modem.sendSMS_UTF8_stream();
+    stream.print(F("Привіііт! Print number: "));
+    stream.print(595);
+    res = modem.sendSMS_UTF8_end();
+  }
+  DBG("UTF8 SMS:", res ? "OK" : "fail");
+
 #endif
 
 #if TINY_GSM_TEST_CALL && defined(CALL_TARGET)
@@ -246,7 +279,7 @@ void loop() {
   uint8_t chargeState = -99;
   int8_t percent = -99;
   uint16_t milliVolts = -9999;
-  modem.getBattStats(chargeState, percent, milliVolts)
+  modem.getBattStats(chargeState, percent, milliVolts);
   DBG("Battery charge state:", chargeState);
   DBG("Battery charge 'percent':", percent);
   DBG("Battery voltage:", milliVolts / 1000.0F);

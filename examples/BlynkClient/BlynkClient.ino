@@ -26,7 +26,7 @@
 
 // Default heartbeat interval for GSM is 60
 // If you want override this value, uncomment and set this option:
-//#define BLYNK_HEARTBEAT 30
+// #define BLYNK_HEARTBEAT 30
 
 // Select your modem:
 #define TINY_GSM_MODEM_SIM800
@@ -34,6 +34,8 @@
 // #define TINY_GSM_MODEM_SIM868
 // #define TINY_GSM_MODEM_SIM900
 // #define TINY_GSM_MODEM_SIM7000
+// #define TINY_GSM_MODEM_SIM5360
+// #define TINY_GSM_MODEM_SIM7600
 // #define TINY_GSM_MODEM_UBLOX
 // #define TINY_GSM_MODEM_SARAR4
 // #define TINY_GSM_MODEM_M95
@@ -61,8 +63,7 @@
 //SoftwareSerial SerialAT(2, 3); // RX, TX
 
 
-// Your GPRS credentials
-// Leave empty, if missing user or pass
+// Your GPRS credentials, if any
 const char apn[]  = "YourAPN";
 const char user[] = "";
 const char pass[] = "";
@@ -89,7 +90,7 @@ void setup()
   modem.restart();
 
   String modemInfo = modem.getModemInfo();
-  SerialMon.print("Modem: ");
+  SerialMon.print("Modem Info: ");
   SerialMon.println(modemInfo);
 
   // Unlock your SIM card with a PIN

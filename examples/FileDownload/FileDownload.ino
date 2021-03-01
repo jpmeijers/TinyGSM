@@ -19,6 +19,8 @@
 // #define TINY_GSM_MODEM_SIM868
 // #define TINY_GSM_MODEM_SIM900
 // #define TINY_GSM_MODEM_SIM7000
+// #define TINY_GSM_MODEM_SIM5360
+// #define TINY_GSM_MODEM_SIM7600
 // #define TINY_GSM_MODEM_UBLOX
 // #define TINY_GSM_MODEM_SARAR4
 // #define TINY_GSM_MODEM_M95
@@ -50,26 +52,28 @@
 #define TINY_GSM_RX_BUFFER 1024
 
 // See all AT commands, if wanted
-//#define DUMP_AT_COMMANDS
+// #define DUMP_AT_COMMANDS
 
 // Define the serial console for debug prints, if needed
 #define TINY_GSM_DEBUG SerialMon
-//#define LOGGING  // <- Logging is for the HTTP library
+// #define LOGGING  // <- Logging is for the HTTP library
 
-// Add a reception delay, if needed
-//#define TINY_GSM_YIELD() { delay(2); }
+// Add a reception delay - may be needed for a fast processor at a slow baud rate
+// #define TINY_GSM_YIELD() { delay(2); }
 
+// Define how you're planning to connect to the internet
 #define TINY_GSM_USE_GPRS true
 #define TINY_GSM_USE_WIFI false
 
 // set GSM PIN, if any
 #define GSM_PIN ""
 
-// Your GPRS credentials
-// Leave empty, if missing user or pass
+// Your GPRS credentials, if any
 const char apn[]  = "YourAPN";
 const char gprsUser[] = "";
 const char gprsPass[] = "";
+
+// Your WiFi connection credentials, if applicable
 const char wifiSSID[]  = "YourSSID";
 const char wifiPass[] = "YourWiFiPass";
 
@@ -77,12 +81,26 @@ const char wifiPass[] = "YourWiFiPass";
 const char server[] = "vsh.pp.ua";
 const int  port = 80;
 
+#include <TinyGsmClient.h>
+#include <CRC32.h>
+
+// Just in case someone defined the wrong thing..
+#if TINY_GSM_USE_GPRS && not defined TINY_GSM_MODEM_HAS_GPRS
+#undef TINY_GSM_USE_GPRS
+#undef TINY_GSM_USE_WIFI
+#define TINY_GSM_USE_GPRS false
+#define TINY_GSM_USE_WIFI true
+#endif
+#if TINY_GSM_USE_WIFI && not defined TINY_GSM_MODEM_HAS_WIFI
+#undef TINY_GSM_USE_GPRS
+#undef TINY_GSM_USE_WIFI
+#define TINY_GSM_USE_GPRS true
+#define TINY_GSM_USE_WIFI false
+#endif
+
 const char resource[]  = "/TinyGSM/test_1k.bin";
 uint32_t knownCRC32    = 0x6f50d767;
 uint32_t knownFileSize = 1024;   // In case server does not send it
-
-#include <TinyGsmClient.h>
-#include <CRC32.h>
 
 #ifdef DUMP_AT_COMMANDS
   #include <StreamDebugger.h>
@@ -99,6 +117,12 @@ void setup() {
   SerialMon.begin(115200);
   delay(10);
 
+  // !!!!!!!!!!!
+  // Set your reset, enable, power pins here
+  // !!!!!!!!!!!
+
+  SerialMon.println("Wait...");
+
   // Set GSM module baud rate
   SerialAT.begin(115200);
   delay(3000);
@@ -107,22 +131,23 @@ void setup() {
   // To skip it, call init() instead of restart()
   SerialMon.println("Initializing modem...");
   modem.restart();
+  // modem.init();
 
   String modemInfo = modem.getModemInfo();
-  SerialMon.print("Modem: ");
+  SerialMon.print("Modem Info: ");
   SerialMon.println(modemInfo);
 
 #if TINY_GSM_USE_GPRS
   // Unlock your SIM card with a PIN if needed
   if ( GSM_PIN && modem.getSimStatus() != 3 ) {
     modem.simUnlock(GSM_PIN);
-}
+  }
 #endif
 }
 
 void printPercent(uint32_t readLength, uint32_t contentLength) {
   // If we know the total length
-  if (contentLength != -1) {
+  if (contentLength != (uint32_t)-1) {
     SerialMon.print("\r ");
     SerialMon.print((100.0 * readLength) / contentLength);
     SerialMon.print('%');
@@ -133,7 +158,8 @@ void printPercent(uint32_t readLength, uint32_t contentLength) {
 
 void loop() {
 
-#if defined TINY_GSM_USE_WIFI && defined TINY_GSM_MODEM_HAS_WIFI
+#if TINY_GSM_USE_WIFI
+  // Wifi connection parameters must be set before waiting for the network
   SerialMon.print(F("Setting SSID/password..."));
   if (!modem.networkConnect(wifiSSID, wifiPass)) {
     SerialMon.println(" fail");
@@ -160,7 +186,8 @@ void loop() {
     SerialMon.println("Network connected");
   }
 
-#if TINY_GSM_USE_GPRS && defined TINY_GSM_MODEM_HAS_GPRS
+#if TINY_GSM_USE_GPRS
+  // GPRS connection parameters are usually set after network registration
   SerialMon.print(F("Connecting to "));
   SerialMon.print(apn);
   if (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
@@ -169,6 +196,10 @@ void loop() {
     return;
   }
   SerialMon.println(" success");
+
+  if (modem.isGprsConnected()) {
+    SerialMon.println("GPRS connected");
+  }
 #endif
 
   SerialMon.print(F("Connecting to "));
@@ -185,51 +216,103 @@ void loop() {
   client.print(String("Host: ") + server + "\r\n");
   client.print("Connection: close\r\n\r\n");
 
-  long timeout = millis();
-  while (client.available() == 0) {
-    if (millis() - timeout > 5000L) {
-      SerialMon.println(F(">>> Client Timeout !"));
-      client.stop();
-      delay(10000L);
-      return;
+  // Let's see what the entire elapsed time is, from after we send the request.
+  uint32_t timeElapsed = millis();
+
+  SerialMon.println(F("Waiting for response header"));
+
+  // While we are still looking for the end of the header (i.e. empty line FOLLOWED by a newline),
+  // continue to read data into the buffer, parsing each line (data FOLLOWED by a newline).
+  // If it takes too long to get data from the client, we need to exit.
+
+  const uint32_t clientReadTimeout = 5000;
+  uint32_t clientReadStartTime = millis();
+  String headerBuffer;
+  bool finishedHeader = false;
+  uint32_t contentLength = 0;
+
+  while (!finishedHeader) {
+    int nlPos;
+
+    if (client.available()) {
+      clientReadStartTime = millis();
+      while (client.available()) {
+        char c = client.read();
+        headerBuffer += c;
+
+        // Uncomment the lines below to see the data coming into the buffer
+        // if (c < 16)
+        //   SerialMon.print('0');
+        // SerialMon.print(c, HEX);
+        // SerialMon.print(' ');
+        // if (isprint(c))
+        //   SerialMon.print(reinterpret_cast<char> c);
+        // else
+        //   SerialMon.print('*');
+        // SerialMon.print(' ');
+
+        // Let's exit and process if we find a new line
+        if (headerBuffer.indexOf(F("\r\n")) >= 0)
+          break;
+      }
+    }
+    else {
+      if (millis() - clientReadStartTime > clientReadTimeout) {
+        // Time-out waiting for data from client
+        SerialMon.println(F(">>> Client Timeout !"));
+        break;
+      }
+    }
+
+    // See if we have a new line.
+    nlPos = headerBuffer.indexOf(F("\r\n"));
+
+    if (nlPos > 0) {
+      headerBuffer.toLowerCase();
+      // Check if line contains content-length
+      if (headerBuffer.startsWith(F("content-length:"))) {
+        contentLength = headerBuffer.substring(headerBuffer.indexOf(':') + 1).toInt();
+        // SerialMon.print(F("Got Content Length: "));  // uncomment for
+        // SerialMon.println(contentLength);            // confirmation
+      }
+
+      headerBuffer.remove(0, nlPos + 2);  // remove the line
+    }
+    else if (nlPos == 0) {
+      // if the new line is empty (i.e. "\r\n" is at the beginning of the line), we are done with the header.
+      finishedHeader = true;
     }
   }
 
-  SerialMon.println(F("Reading response header"));
-  uint32_t contentLength = knownFileSize;
+  // The two cases which are not managed properly are as follows:
+  // 1. The client doesn't provide data quickly enough to keep up with this loop.
+  // 2. If the client data is segmented in the middle of the 'Content-Length: ' header,
+  //    then that header may be missed/damaged.
+  //
 
-  while (client.available()) {
-    String line = client.readStringUntil('\n');
-    line.trim();
-    //SerialMon.println(line);    // Uncomment this to show response header
-    line.toLowerCase();
-    if (line.startsWith("content-length:")) {
-      contentLength = line.substring(line.lastIndexOf(':') + 1).toInt();
-    } else if (line.length() == 0) {
-      break;
-    }
-  }
-
-  SerialMon.println(F("Reading response data"));
-  timeout = millis();
   uint32_t readLength = 0;
   CRC32 crc;
 
-  unsigned long timeElapsed = millis();
-  printPercent(readLength, contentLength);
-  while (readLength < contentLength && client.connected() && millis() - timeout < 10000L) {
-    while (client.available()) {
-      uint8_t c = client.read();
-      //SerialMon.print((char)c);       // Uncomment this to show data
-      crc.update(c);
-      readLength++;
-      if (readLength % (contentLength / 13) == 0) {
-        printPercent(readLength, contentLength);
+  if (finishedHeader && contentLength == knownFileSize) {
+    SerialMon.println(F("Reading response data"));
+    clientReadStartTime = millis();
+
+    printPercent(readLength, contentLength);
+    while (readLength < contentLength && client.connected() && millis() - clientReadStartTime < clientReadTimeout) {
+      while (client.available()) {
+        uint8_t c = client.read();
+        //SerialMon.print(reinterpret_cast<char>c);  // Uncomment this to show data
+        crc.update(c);
+        readLength++;
+        if (readLength % (contentLength / 13) == 0) {
+          printPercent(readLength, contentLength);
+        }
+        clientReadStartTime = millis();
       }
-      timeout = millis();
     }
+    printPercent(readLength, contentLength);
   }
-  printPercent(readLength, contentLength);
+
   timeElapsed = millis() - timeElapsed;
   SerialMon.println();
 
@@ -238,8 +321,14 @@ void loop() {
   client.stop();
   SerialMon.println(F("Server disconnected"));
 
+#if TINY_GSM_USE_WIFI
+  modem.networkDisconnect();
+  SerialMon.println(F("WiFi disconnected"));
+#endif
+#if TINY_GSM_USE_GPRS
   modem.gprsDisconnect();
   SerialMon.println(F("GPRS disconnected"));
+#endif
 
   float duration = float(timeElapsed) / 1000;
 
