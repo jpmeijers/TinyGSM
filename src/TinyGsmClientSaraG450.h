@@ -264,11 +264,11 @@ public:
    * Basic functions
    */
 
-  bool begin(const char* pin = NULL) {
-    return init(pin);
-  }
+  // bool begin(const char* pin = NULL) {
+  //   return init(pin);
+  // }
 
-  bool init(const char* pin = NULL) {
+  bool init() {
     DBG(GF("### TinyGSM Version:"), TINYGSM_VERSION);
 
     powerOnModule();
@@ -277,6 +277,9 @@ public:
       return false;
     }
 
+    // When we send multiple ATs, we get multiple OKs back, but delayed. 
+    // Make sure we catch them all and clear the buffers. Otherwise a 
+    // rogue OK will mess things up later.
     delay(1000);
     clearRxStreamBuffer();
 
@@ -284,12 +287,12 @@ public:
     if (waitResponse() != 1) {
       return false;
     }
-    sendAT(GF("&W"));   // Echo Off sometimes only takes affect after we force a save
-    if (waitResponse(30000) != 1) { // Takes long to save
-      return false;
-    }
+    // sendAT(GF("&W"));   // Echo Off sometimes only takes affect after we force a save
+    // if (waitResponse(30000) != 1) { // Takes long to save. Normally <1s, but it could be more.
+    //   return false;
+    // }
     // Echo off takes a while to be affective
-    delay(200);
+    // delay(200);
     clearRxStreamBuffer();
 
 #ifdef TINY_GSM_DEBUG
@@ -301,11 +304,15 @@ public:
       return false;
     }
 
-    if(!getModemName()) {
+    if(!getModemName()) { // getModemName() returns a string. Shouldn't we check for empty string?
       return false;
     }
 
-    int ret = getSimStatus();
+    return true;
+  }
+
+  bool initSim(const char* pin = NULL) {
+    int ret = getSimStatus(1000);
     // if the sim isn't ready and a pin has been provided, try to unlock the sim
     if (ret != SIM_READY && pin != NULL && strlen(pin) > 0) {
       simUnlock(pin);
@@ -325,6 +332,7 @@ public:
       delay(1000);
       digitalWrite(TINY_GSM_PIN_POWER_OFF, HIGH);
       pinMode(TINY_GSM_PIN_POWER_OFF, INPUT);
+      delay(1000);
     #else
       #error "Please define TINY_GSM_PIN_POWER_OFF"
     #endif
@@ -337,6 +345,7 @@ public:
       delay(1000);
       digitalWrite(TINY_GSM_PIN_POWER_ON, HIGH);
       pinMode(TINY_GSM_PIN_POWER_ON, INPUT);
+      delay(1000);
     #else
       #error "Please define TINY_GSM_PIN_POWER_ON"
     #endif
@@ -346,7 +355,7 @@ public:
     sendAT(GF("+CGMI"));
     String res1;
     if (waitResponse(1000L, res1) != 1) {
-      return "u-blox Cellular Modem";
+      return "u-blox Cellular Modem"; // TODO: shouldn't we return false?
     }
     res1.replace(GSM_NL "OK" GSM_NL, "");
     res1.trim();
@@ -354,7 +363,7 @@ public:
     sendAT(GF("+GMM"));
     String res2;
     if (waitResponse(1000L, res2) != 1) {
-      return "u-blox Cellular Modem";
+      return "u-blox Cellular Modem"; // TODO: shouldn't we return false?
     }
     res2.replace(GSM_NL "OK" GSM_NL, "");
     res2.trim();
@@ -376,10 +385,9 @@ public:
   }
 
   bool testAT(unsigned long timeout_ms = 10000L) {
-    delay(1000);
     for (unsigned long start = millis(); millis() - start < timeout_ms; ) {
       sendAT(GF(""));
-      if (waitResponse(500) == 1) {
+      if (waitResponse(1000) == 1) { // first response to AT takes a while. +-1 second.
         return true;
       }
       delay(200);
@@ -594,6 +602,7 @@ public:
     else return false;
   }
 
+  // Seen this take 30s, so could be more. Or should we delay shorter for cases where there is no reception?
   bool waitForNetworkGsm(unsigned long timeout_ms = 60000L) {
     for (unsigned long start = millis(); millis() - start < timeout_ms; ) {
       if (isNetworkGsmConnected()) {
@@ -1166,6 +1175,7 @@ finish:
     }
     //data.replace(GSM_NL, "/");
     //DBG('<', index, '>', data);
+    DBG("WaitResponse() took: ", (millis() - startMillis), "ms");
     return index;
   }
 
